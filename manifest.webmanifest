@@ -1,0 +1,16 @@
+{
+  "name": "Диабет-контроль",
+  "short_name": "Диабет",
+  "description": "Запасы инсулина и расходников, врачи, анализы и оценка компенсации.",
+  "lang": "ru",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#E9EFFB",
+  "theme_color": "#E9EFFB",
+  "icons": [
+    { "src": "icons/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
