@@ -147,12 +147,14 @@ export function pumpStats(pump, from, to) {
   let count = 0;
   let basal = 0;
   let basalDays = 0;
+  let prime = 0;
   for (const [date, d] of Object.entries(pump.days || {})) {
     if (date < a || date > b) continue;
     days++;
     bolus += d.bolus || 0;
     carbs += d.carbs || 0;
     count += d.boluses || 0;
+    prime += d.prime || 0;
     if (d.basal != null) {
       basal += d.basal;
       basalDays++;
@@ -161,12 +163,17 @@ export function pumpStats(pump, from, to) {
   if (!days) return null;
   const avgBolus = bolus / days;
   const avgBasal = basalDays ? basal / basalDays : null;
+  const tdd = avgBasal == null ? null : avgBolus + avgBasal;
   return {
     days,
     bolus: avgBolus,
     basal: avgBasal,
-    tdd: avgBasal == null ? null : avgBolus + avgBasal,
+    tdd,
+    // Заполнение трубки и канюли: в организм не попадает, но из запаса уходит.
+    prime: prime / days,
+    use: tdd == null ? null : tdd + prime / days,
     carbs: carbs / days,
+    carbUnit: pump.carbUnit === 'ex' ? 'ex' : 'g',
     boluses: count / days,
   };
 }

@@ -96,7 +96,7 @@ export function sheetEditSupply(kind) {
   let fields;
   if (kind === 'insulin') {
     const p = pumpStats(data.pump, Date.now() - 14 * 864e5, Date.now());
-    const fromPump = p?.tdd ? ` По данным помпы за последние дни: ${fmtNum(p.tdd, 1)} ед в сутки, без учёта заполнения канюли.` : '';
+    const fromPump = p?.use ? ` По данным помпы за последние дни: ${fmtNum(p.use, 1)} ед в сутки вместе с заполнением трубки.` : '';
     fields = [
       { name: 'name', label: 'Название', value: s.name, required: true },
       { name: 'packUnits', label: 'Одна упаковка', type: 'select', value: s.packUnits, options: [[300, 'Картридж или шприц-ручка 3 мл, 300 ед'], [1000, 'Флакон 10 мл, 1000 ед']] },

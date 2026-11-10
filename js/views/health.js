@@ -176,12 +176,12 @@ export function health() {
         list.map((item) => {
           const st = statusOf(item, now);
           const last = item.results.at(-1);
-          const sub = [every(item.intervalMonths), st.next ? `${item.appointment ? 'запись на' : 'срок'} ${fmtDate(fromYmd(st.next), true)}` : item.intervalMonths ? 'укажите, когда было в последний раз' : null, last ? `последний результат ${fmtNum(last.value, 1)} ${item.unit}` : null].filter(Boolean).join(', ');
+          const sub = [st.next ? `${item.appointment ? 'запись на' : 'срок'} ${fmtDate(fromYmd(st.next), true)}` : item.intervalMonths ? 'укажите, когда было в последний раз' : null, every(item.intervalMonths), last ? `последний результат ${fmtNum(last.value, 1)} ${item.unit}` : null].filter(Boolean).join(', ');
+          // Все строки одного вида: название, строка со сроком и пояснением, стрелка.
           return h(
             'button',
             { class: 'row row-btn', type: 'button', onclick: () => sheetItem(item) },
-            h('div', { class: 'row-main' }, h('b', {}, item.title), h('span', { class: 'muted' }, sub)),
-            h('span', { class: 'pill ' + st.cls }, st.text),
+            h('div', { class: 'row-main' }, h('b', {}, item.title), h('span', { class: 'muted' }, h('span', { class: 'when ' + st.cls }, st.text[0].toUpperCase() + st.text.slice(1)), `, ${sub}`)),
             icon('chevron', 18),
           );
         }),

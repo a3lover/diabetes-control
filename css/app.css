@@ -197,13 +197,21 @@ h3 { font-size: 14px; font-weight: 500; color: var(--ink-2); }
 }
 
 /* ---------- Карточки ---------- */
+/* Карточки в одной строке сетки всегда одной высоты: строка растягивает их,
+   а кнопки прижимаются к низу, поэтому соседние блоки совпадают при любом тексте. */
 
-.card { padding: 20px; display: grid; gap: 12px; align-content: start; }
+.card { padding: 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.card > .actions:last-child { margin-top: auto; padding-top: 4px; }
 .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.grid-2 { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+.card-head.nowrap { flex-wrap: nowrap; align-items: flex-start; }
+.title-block { min-width: 0; display: grid; gap: 2px; }
+/* Строки с текстом в карточках запасов всегда занимают две строки: карточки совпадают и в одну колонку. */
+.two-lines { min-height: 2.9em; }
+.one-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+.grid-2 { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); align-items: stretch; }
 .stack-cards { display: grid; gap: 16px; align-content: start; }
 @media (min-width: 760px) {
-  .grid-2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .grid-2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .span-2 { grid-column: 1 / -1; }
 }
 .banner { padding: 14px 18px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; border-radius: var(--r-md); }
@@ -212,26 +220,30 @@ h3 { font-size: 14px; font-weight: 500; color: var(--ink-2); }
 .note { padding: 12px 14px; border-radius: var(--r-sm); background: var(--well); white-space: pre-wrap; }
 
 /* ---------- Плитки расходников: стеклянные колбы с уровнем ---------- */
+/* Четыре плитки одинаковы по построению: значение в одну строку, пояснение ровно в две,
+   кнопка в одну. Высота не зависит от того, какие слова в них попали. */
 
-.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 12px; }
 @media (min-width: 900px) { .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; } }
-.tile { --tone-a: var(--liquid-a); --tone-b: var(--liquid-b); padding: 16px 14px 14px; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 1fr auto; gap: 14px 12px; border-radius: var(--r-lg); }
+.tile { --tone-a: var(--liquid-a); --tone-b: var(--liquid-b); padding: 16px 14px 14px; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr auto; gap: 12px; border-radius: var(--r-lg); }
 .tile[data-status='warn'] { --tone-a: #ffd166; --tone-b: #e58a00; }
 .tile[data-status='danger'] { --tone-a: #ff8fa0; --tone-b: #db2f4b; }
-.tile-text { min-width: 0; display: grid; gap: 4px; align-content: start; }
-.tile-text h3 { overflow-wrap: anywhere; }
-.tile-value { font-family: var(--font-display); font-weight: 600; font-size: clamp(19px, 5.2vw, 24px); line-height: 1.12; letter-spacing: -0.02em; }
+.tile-top { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.tile-text { min-width: 0; flex: 1; display: grid; gap: 4px; }
+.tile-text h3, .tile-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile-value { font-family: var(--font-display); font-weight: 600; font-size: 21px; line-height: 1.15; letter-spacing: -0.02em; }
+@media (min-width: 420px) { .tile-value { font-size: 24px; } }
 .tile[data-status='warn'] .tile-value { color: var(--warn); }
 .tile[data-status='danger'] .tile-value { color: var(--danger); }
-.tile-sub { font-size: 13px; line-height: 1.35; color: var(--ink-2); }
-.tile .btn { grid-column: 1 / -1; }
+.tile-sub { font-size: 13px; line-height: 1.35; height: 2.7em; color: var(--ink-2); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.tile .btn { width: 100%; padding-inline: 8px; white-space: nowrap; }
 
 .vial {
   position: relative;
-  width: 30px;
-  height: 100%;
-  min-height: 92px;
-  border-radius: 15px;
+  flex: none;
+  width: 26px;
+  height: 64px;
+  border-radius: 13px;
   overflow: hidden;
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.08) 45%, rgba(255, 255, 255, 0.3));
   box-shadow: inset 0 0 0 1px var(--glass-edge), inset 0 8px 12px -8px rgba(15, 27, 61, 0.35);
@@ -246,7 +258,7 @@ h3 { font-size: 14px; font-weight: 500; color: var(--ink-2); }
 }
 .vial .liquid::before { content: ''; position: absolute; left: 0; right: 0; top: -4px; height: 8px; border-radius: 50%; background: color-mix(in srgb, var(--tone-a) 70%, white); }
 .tile[data-status='none'] .liquid { display: none; }
-.vial::after { content: ''; position: absolute; left: 6px; top: 9px; bottom: 9px; width: 4px; border-radius: 2px; background: linear-gradient(rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.15)); }
+.vial::after { content: ''; position: absolute; left: 5px; top: 8px; bottom: 8px; width: 4px; border-radius: 2px; background: linear-gradient(rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.15)); }
 
 /* ---------- Кнопки ---------- */
 
@@ -301,7 +313,10 @@ h3 { font-size: 14px; font-weight: 500; color: var(--ink-2); }
 .pill.ok { background: var(--ok-bg); color: var(--ok); }
 .pill.warn { background: var(--warn-bg); color: var(--warn); }
 .pill.danger { background: var(--danger-bg); color: var(--danger); }
-@media (max-width: 480px) { .row .pill { white-space: normal; text-align: right; max-width: 42%; } }
+.when { font-weight: 500; }
+.when.ok { color: var(--ok); }
+.when.warn { color: var(--warn); }
+.when.danger { color: var(--danger); }
 .mark { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; }
 .mark.ok { background: var(--ok-bg); color: var(--ok); }
 .mark.danger { background: var(--danger-bg); color: var(--danger); }
@@ -336,7 +351,7 @@ h3 { font-size: 14px; font-weight: 500; color: var(--ink-2); }
 .chip input:checked + span small { color: inherit; opacity: 0.8; }
 .chip input:focus-visible + span { outline: 2.5px solid var(--accent); outline-offset: 2px; }
 
-.seg { display: inline-flex; padding: 4px; border-radius: 999px; background: var(--well); max-width: 100%; }
+.seg { display: inline-flex; align-self: flex-start; padding: 4px; border-radius: 999px; background: var(--well); max-width: 100%; }
 .seg button { padding: 8px 14px; border-radius: 999px; font-size: 14px; font-weight: 500; color: var(--ink-2); white-space: nowrap; }
 .seg button[aria-pressed='true'] { color: var(--ink); background: var(--lift); box-shadow: inset 0 0 0 1px var(--glass-edge), 0 4px 10px -6px var(--glass-shadow); }
 

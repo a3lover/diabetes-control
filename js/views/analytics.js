@@ -1,8 +1,8 @@
-import { data, commit, saveGlucose, savePump } from '../store.js';
+import { data, commit, saveGlucose, savePump, logEvent } from '../store.js';
 import { h, icon, openSheet, toast, pickFile, fmtDate, fmtNum, plural, DAYS } from '../ui.js';
 import { analyze, targets, pumpStats, DAY } from '../metrics.js';
 import { parseCareLink, readTable, buildGlucose, mergeGlucose, ImportError } from '../importers.js';
-import { fromYmd } from '../logic.js';
+import { fromYmd, lastEvent } from '../logic.js';
 
 let period = 14;
 
@@ -151,6 +151,10 @@ async function importCareLink() {
     return showImportError(e);
   }
   Object.assign(data.pump.days, res.days);
+  data.pump.carbUnit = res.carbUnit;
+  const fills = new Map((data.pump.fills || []).map((f) => [f.ts, f]));
+  for (const f of res.fills) fills.set(f.ts, f);
+  data.pump.fills = [...fills.values()].sort((a, b) => a.ts - b.ts).slice(-200);
   data.state.imports.pump = { at: Date.now(), name: file.name };
   if (res.glucose.length) {
     data.glucose = mergeGlucose(data.glucose, res.glucose);
@@ -158,16 +162,46 @@ async function importCareLink() {
   }
   await savePump();
   commit();
+
   const c = res.counts;
-  openSheet(
+  const row = (label, value) => h('div', { class: 'row' }, h('span', { class: 'muted' }, label), h('b', {}, value));
+  const timeFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+  const lastFill = res.fills.filter((f) => f.volume != null).at(-1);
+  const journalFill = lastEvent(data.state, 'reservoir');
+  const canLog = lastFill && (!journalFill || lastFill.ts - journalFill.at > 60000);
+  const close = openSheet(
     'Выгрузка CareLink загружена',
     h(
       'div',
       { class: 'sheet-body' },
       h('p', {}, `Период с ${fmtDate(res.from, true)} по ${fmtDate(res.to, true)}. Полных дней: ${c.days}.`),
-      h('div', { class: 'rows compact' }, h('div', { class: 'row' }, h('span', { class: 'muted' }, 'Болюсов'), h('b', {}, fmtNum(c.boluses))), h('div', { class: 'row' }, h('span', { class: 'muted' }, 'Записей об углеводах'), h('b', {}, fmtNum(c.carbs))), h('div', { class: 'row' }, h('span', { class: 'muted' }, 'Изменений базальной скорости'), h('b', {}, fmtNum(c.basalChanges))), h('div', { class: 'row' }, h('span', { class: 'muted' }, 'Значений сенсора'), h('b', {}, fmtNum(res.glucose.length)))),
+      h(
+        'div',
+        { class: 'rows compact' },
+        row('Болюсов', fmtNum(c.boluses)),
+        row(res.carbUnit === 'ex' ? 'Записей об углеводах, в ХЕ' : 'Записей об углеводах, в граммах', fmtNum(c.carbs)),
+        row('Изменений базальной скорости', fmtNum(c.basalChanges)),
+        row('Заправок резервуара', fmtNum(res.fills.length)),
+        row('Из них с заполнением канюли', fmtNum(res.fills.filter((f) => f.cannula > 0).length)),
+        res.glucose.length > 0 && row('Значений сенсора', fmtNum(res.glucose.length)),
+      ),
       !c.basalChanges && h('p', { class: 'hint' }, 'В файле нет записей о базальной скорости, поэтому суточная доза посчитана только по болюсам.'),
-      h('p', { class: 'hint' }, 'Сверьте среднюю суточную дозу с отчётом CareLink. Разбор файла написан по описанию формата и ещё не проверен на выгрузке вашей помпы.'),
+      lastFill && h('p', {}, `Последняя заправка: ${timeFmt.format(lastFill.ts)}, в резервуаре ${fmtNum(lastFill.volume)} ед.`),
+      canLog &&
+        h(
+          'button',
+          {
+            class: 'btn primary wide',
+            type: 'button',
+            onclick: () => {
+              logEvent({ type: 'reservoir', at: lastFill.ts, units: Math.round(lastFill.volume), noStock: true });
+              close();
+              toast('Заправка записана в журнал');
+            },
+          },
+          'Записать эту заправку в журнал',
+        ),
+      canLog && h('p', { class: 'hint' }, 'Плитка «Резервуар» начнёт отсчёт от этой заправки. Запасы инсулина и резервуаров при этом не изменятся.'),
     ),
   );
 }
@@ -281,13 +315,31 @@ export function analytics() {
         stat('Суточная доза', p.tdd == null ? '–' : fmtNum(p.tdd, 1), 'ед'),
         stat('База', p.basal == null ? '–' : fmtNum(p.basal, 1), p.tdd ? `ед, ${fmtNum((p.basal / p.tdd) * 100)}%` : 'ед'),
         stat('Болюсы', fmtNum(p.bolus, 1), p.tdd ? `ед, ${fmtNum((p.bolus / p.tdd) * 100)}%` : 'ед'),
-        stat('Углеводы', fmtNum(p.carbs), 'г в сутки'),
+        p.carbUnit === 'ex' ? stat('Углеводы', fmtNum(p.carbs, 1), 'ХЕ в сутки') : stat('Углеводы', fmtNum(p.carbs), 'г в сутки'),
         stat('Болюсов', fmtNum(p.boluses, 1), 'в сутки'),
+        stat('Заполнение', fmtNum(p.prime, 1), 'ед в сутки'),
       ),
-      p.tdd != null &&
+      p.use != null && h('p', { class: 'hint' }, `Из запаса уходит в среднем ${fmtNum(p.use, 1)} ед в сутки: суточная доза и заполнение трубки с канюлей. Инсулин, который остаётся в резервуаре при замене, сюда не входит.`),
+      p.use != null &&
         state.supplies.insulin.configured &&
-        Math.abs(p.tdd - state.supplies.insulin.dailyUnits) > 1 &&
-        h('p', { class: 'hint' }, `В прогнозе запаса сейчас стоит расход ${fmtNum(state.supplies.insulin.dailyUnits, 1)} ед в сутки. Помпа показывает ${fmtNum(p.tdd, 1)} ед без потерь на заполнение. При необходимости поправьте расход на вкладке «Запасы».`),
+        Math.abs(p.use - state.supplies.insulin.dailyUnits) > 1 &&
+        h(
+          'div',
+          { class: 'actions no-print' },
+          h(
+            'button',
+            {
+              class: 'btn',
+              type: 'button',
+              onclick: () => {
+                state.supplies.insulin.dailyUnits = Math.round(p.use * 10) / 10;
+                commit();
+                toast('Расход в прогнозе запаса обновлён');
+              },
+            },
+            `Считать запас по ${fmtNum(p.use, 1)} ед в сутки вместо ${fmtNum(state.supplies.insulin.dailyUnits, 1)}`,
+          ),
+        ),
     );
 
   const src = state.imports;

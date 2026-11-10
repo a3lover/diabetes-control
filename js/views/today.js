@@ -1,25 +1,33 @@
-import { data, replaceAll } from '../store.js';
+import { data, replaceAll, defaults } from '../store.js';
 import { h, fmtDate, fmtNum, relDay, plural, DAYS } from '../ui.js';
 import { insulinInfo, reservoirInfo, wearInfo, reminders, statusByDays, dayDiff, clamp, fromYmd, DAY } from '../logic.js';
 import { analyze } from '../metrics.js';
 import { sheetSetChange, sheetReservoir, sheetSensor, sheetRestock, sheetEditSupply } from '../actions.js';
 import { makeDemo } from '../demo.js';
-import { defaults } from '../store.js';
 import { tirBar } from './analytics.js';
 
+// Все плитки устроены одинаково: колба, короткое название, одно значение в строку,
+// пояснение ровно в две строки и кнопка. Поэтому они совпадают по размеру при любых данных.
 function tile({ title, value, sub, level, status, action, onAction }) {
   return h(
     'article',
     { class: 'tile glass', 'data-status': status },
-    h('div', { class: 'vial', style: { '--level': clamp(level ?? 0).toFixed(3) }, 'aria-hidden': 'true' }, h('span', { class: 'liquid' })),
-    h('div', { class: 'tile-text' }, h('h3', {}, title), h('p', { class: 'tile-value' }, value), h('p', { class: 'tile-sub' }, sub)),
+    h(
+      'div',
+      { class: 'tile-top' },
+      h('div', { class: 'vial', style: { '--level': clamp(level ?? 0).toFixed(3) }, 'aria-hidden': 'true' }, h('span', { class: 'liquid' })),
+      h('div', { class: 'tile-text' }, h('h3', {}, title), h('p', { class: 'tile-value' }, value)),
+    ),
+    h('p', { class: 'tile-sub' }, sub),
     h('button', { class: 'btn', type: 'button', onclick: onAction }, action),
   );
 }
 
-function setupTile(title, kind) {
-  return tile({ title, value: 'Не настроено', sub: 'Укажите запас, чтобы видеть прогноз', level: 0, status: 'none', action: 'Настроить', onAction: () => sheetEditSupply(kind) });
-}
+const setupTile = (title, kind) =>
+  tile({ title, value: '–', sub: 'Не настроено: укажите запас', level: 0, status: 'none', action: 'Настроить', onAction: () => sheetEditSupply(kind) });
+
+/** Сколько осталось до срока: «3 дня», «завтра», «сегодня», «пора». */
+const untilText = (d) => (d < 0 ? 'пора' : d === 0 ? 'сегодня' : d === 1 ? 'завтра' : `${d} ${plural(d, DAYS)}`);
 
 function supplyTiles(state, now) {
   const S = state.supplies;
@@ -31,26 +39,26 @@ function supplyTiles(state, now) {
     const days = Math.floor(i.daysLeft);
     tiles.push(
       tile({
-        title: `Инсулин ${S.insulin.name}`,
-        value: `на ${days} ${plural(days, DAYS)}`,
+        title: 'Инсулин',
+        value: `${days} ${plural(days, DAYS)}`,
         sub: `${fmtNum(i.total)} ед, хватит до ${fmtDate(i.runOut)}`,
         level: i.daysLeft / 60,
         status: statusByDays(i.daysLeft, S.insulin.reserveDays, S.insulin.reserveDays / 2),
-        action: 'Пополнить запас',
+        action: 'Пополнить',
         onAction: () => sheetRestock('insulin'),
       }),
     );
   }
 
-  if (!S.sets.configured) tiles.push(setupTile('Инфузионный набор', 'sets'));
+  if (!S.sets.configured) tiles.push(setupTile('Набор', 'sets'));
   else {
     const w = wearInfo(state, now, 'set');
     const d = w.due ? dayDiff(w.due, now) : null;
     tiles.push(
       tile({
-        title: 'Инфузионный набор',
-        value: !w.last ? 'Нет записи' : d < 0 ? 'пора менять' : `менять ${relDay(d)}`,
-        sub: !w.last ? 'Отметьте последнюю смену' : `стоит с ${fmtDate(w.last.at)}${w.last.site ? ', ' + w.last.site.toLowerCase() : ''}`,
+        title: 'Набор',
+        value: w.last ? untilText(d) : '–',
+        sub: !w.last ? 'Отметьте последнюю смену' : d < 0 ? `срок вышел ${fmtDate(w.due)}` : `до смены, стоит с ${fmtDate(w.last.at)}`,
         level: w.level,
         status: w.last ? statusByDays(w.daysLeft, 1) : 'none',
         action: 'Сменил набор',
@@ -65,11 +73,11 @@ function supplyTiles(state, now) {
     tiles.push(
       tile({
         title: 'Резервуар',
-        value: !r.fill ? 'Нет записи' : r.left == null ? `${fmtNum(r.fill.units)} ед набрано` : `около ${fmtNum(r.left)} ед`,
-        sub: !r.fill ? 'Отметьте последнюю заправку' : r.left == null ? 'Укажите суточный расход инсулина' : r.left <= 0 ? 'по расчёту уже пуст' : `хватит примерно до ${fmtDate(r.emptyAt)}`,
+        value: !r.fill ? '–' : `${fmtNum(r.left ?? r.fill.units)} ед`,
+        sub: !r.fill ? 'Отметьте последнюю заправку' : r.left == null ? 'набрано, укажите расход инсулина' : r.left <= 0 ? 'по расчёту уже пуст' : `по расчёту, до ${fmtDate(r.emptyAt)}`,
         level: r.level,
         status: r.fill && r.left != null ? statusByDays(r.daysLeft, 1, 0.4) : 'none',
-        action: 'Заправил резервуар',
+        action: 'Заправил',
         onAction: sheetReservoir,
       }),
     );
@@ -81,12 +89,12 @@ function supplyTiles(state, now) {
     const d = w.due ? dayDiff(w.due, now) : null;
     tiles.push(
       tile({
-        title: `Датчик ${S.sensors.name}`,
-        value: !w.last ? 'Нет записи' : d < 0 ? 'срок вышел' : `менять ${relDay(d)}`,
-        sub: !w.last ? 'Отметьте, когда поставили' : `стоит с ${fmtDate(w.last.at)}, до ${fmtDate(w.due)}`,
+        title: 'Датчик',
+        value: w.last ? untilText(d) : '–',
+        sub: !w.last ? 'Отметьте, когда поставили' : d < 0 ? `срок вышел ${fmtDate(w.due)}` : `до смены ${fmtDate(w.due)}`,
         level: w.level,
         status: w.last ? statusByDays(w.daysLeft, 2) : 'none',
-        action: 'Поставил новый',
+        action: 'Новый датчик',
         onAction: sheetSensor,
       }),
     );
@@ -94,18 +102,17 @@ function supplyTiles(state, now) {
   return tiles;
 }
 
+/** Строка дела: дата, название и одна строка со сроком и пояснением. */
 export function reminderRow(r) {
-  const t = fromYmd(r.date);
-  const d = new Date(t);
+  const d = new Date(fromYmd(r.date));
   const month = new Intl.DateTimeFormat('ru-RU', { month: 'short' }).format(d).replace('.', '');
   const status = r.daysLeft < 0 ? 'danger' : r.daysLeft <= 3 ? 'warn' : 'ok';
-  const when = r.daysLeft < 0 ? `срок прошёл ${relDay(r.daysLeft)}` : relDay(r.daysLeft);
+  const when = r.daysLeft < 0 ? `Срок прошёл ${relDay(r.daysLeft)}` : relDay(r.daysLeft);
   return h(
     'div',
     { class: 'row' },
     h('div', { class: 'datebox', 'data-status': status }, h('b', {}, d.getDate()), h('span', {}, month)),
-    h('div', { class: 'row-main' }, h('b', {}, r.title), h('span', { class: 'muted' }, r.note)),
-    h('span', { class: 'pill ' + status }, when),
+    h('div', { class: 'row-main' }, h('b', {}, r.title), h('span', { class: 'muted' }, h('span', { class: 'when ' + status }, when[0].toUpperCase() + when.slice(1)), `. ${r.note}`)),
   );
 }
 

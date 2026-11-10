@@ -6,17 +6,18 @@ import { sheetRestock, sheetEditSupply, sheetTravel, SUPPLY_TITLES } from '../ac
 function supplyCard(kind, now) {
   const state = data.state;
   const s = state.supplies[kind];
-  const head = h('div', { class: 'card-head' }, h('h2', {}, `${SUPPLY_TITLES[kind]}: ${s.name}`));
+  // Заголовок у всех карточек одинаковый: вид расходника, под ним название, справа срок.
+  const head = (pill) => h('div', { class: 'card-head nowrap' }, h('div', { class: 'title-block' }, h('h2', {}, SUPPLY_TITLES[kind]), h('p', { class: 'muted one-line' }, s.name)), pill);
 
   if (!s.configured) {
-    return h('section', { class: 'card glass' }, head, h('p', { class: 'empty' }, 'Запас не указан.'), h('div', { class: 'actions' }, h('button', { class: 'btn primary', type: 'button', onclick: () => sheetEditSupply(kind) }, 'Указать запас')));
+    return h('section', { class: 'card glass' }, head(h('span', { class: 'pill' }, 'не настроено')), h('p', { class: 'two-lines' }, 'Запас не указан.'), h('p', { class: 'muted two-lines' }, 'Укажите остаток, и появится прогноз, до какого числа его хватит.'), h('div', { class: 'actions' }, h('button', { class: 'btn primary', type: 'button', onclick: () => sheetEditSupply(kind) }, 'Указать запас')));
   }
 
   let stockText;
   let info;
   if (kind === 'insulin') {
     info = insulinInfo(state, now);
-    stockText = `${s.fullPacks} ${plural(s.fullPacks, ['целая упаковка', 'целые упаковки', 'целых упаковок'])} по ${s.packUnits} ед и ${fmtNum(s.openedUnits)} ед в начатой. Всего дома ${fmtNum(info.home)} ед.`;
+    stockText = `Дома ${fmtNum(info.home)} ед: ${s.fullPacks} ${plural(s.fullPacks, ['упаковка', 'упаковки', 'упаковок'])} по ${s.packUnits} и ${fmtNum(s.openedUnits)} в начатой.`;
   } else {
     info = stockInfo(state, now, kind);
     stockText = `В запасе ${s.stock} шт.`;
@@ -27,11 +28,11 @@ function supplyCard(kind, now) {
   return h(
     'section',
     { class: 'card glass' },
-    h('div', { class: 'card-head' }, h('h2', {}, `${SUPPLY_TITLES[kind]}: ${s.name}`), days != null && h('span', { class: 'pill ' + status }, `на ${days} ${plural(days, DAYS)}`)),
-    h('p', {}, stockText),
+    head(h('span', { class: 'pill ' + (days == null ? '' : status) }, days == null ? 'нет прогноза' : `на ${days} ${plural(days, DAYS)}`)),
+    h('p', { class: 'two-lines' }, stockText),
     info.runOut
-      ? h('p', { class: 'muted' }, `Хватит до ${fmtDate(info.runOut, true)}. Пополнить стоит до ${fmtDate(info.orderBy, true)}.`)
-      : h('p', { class: 'muted' }, kind === 'reservoirs' ? 'Прогноз появится после первой записи о заправке.' : 'Прогноз появится после первой записи о смене.'),
+      ? h('p', { class: 'muted two-lines' }, `Хватит до ${fmtDate(info.runOut, true)}. Пополнить стоит до ${fmtDate(info.orderBy, true)}.`)
+      : h('p', { class: 'muted two-lines' }, kind === 'reservoirs' ? 'Прогноз появится после первой записи о заправке.' : 'Прогноз появится после первой записи о смене.'),
     h(
       'div',
       { class: 'actions' },

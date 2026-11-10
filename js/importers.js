@@ -110,12 +110,6 @@ export function guessOrder(samples) {
   return mdy && !dmy ? 'mdy' : 'dmy';
 }
 
-function parseDuration(s) {
-  const m = String(s || '').trim().match(/^(\d+):(\d{2})(?::(\d{2}))?$/);
-  if (!m) return null;
-  return (Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3] || 0)) * 1000;
-}
-
 export class ImportError extends Error {
   constructor(message, details) {
     super(message);
@@ -124,8 +118,17 @@ export class ImportError extends Error {
 }
 
 // ---------- CareLink ----------
+//
+// Формат проверен на выгрузке MiniMed 720G. Что важно знать о нём:
+// - строки идут от новых к старым;
+// - болюс записан двумя строками: «выбрано» и «введено», берём введённое;
+// - колонка Basal Rate смешивает два вида строк. Фактическая скорость пишется в момент события
+//   (старт и конец временной базальной, остановка, возобновление, граница профиля).
+//   Плановая скорость профиля пишется второй строкой на границе и одиночной строкой
+//   в начале следующей минуты после события. Для расчёта нужна только фактическая;
+// - углеводы могут быть в хлебных единицах (exchanges), а не в граммах.
 
-/** Разбирает CSV-выгрузку CareLink. Возвращает суточные итоги помпы и сахара сенсора, если они есть. */
+/** Разбирает CSV-выгрузку CareLink: суточные итоги, заправки резервуара, сахара сенсора. */
 export function parseCareLink(text) {
   const rows = parseCSV(text);
   const sections = [];
@@ -147,9 +150,13 @@ export function parseCareLink(text) {
 
   const boluses = [];
   const carbs = [];
-  const changes = [];
+  const rateRows = [];
+  const suspends = [];
+  const primes = [];
+  const fills = [];
   const glucose = [];
   const rewinds = [];
+  let carbUnit = 'g';
   let minTs = Infinity;
   let maxTs = -Infinity;
 
@@ -160,18 +167,27 @@ export function parseCareLink(text) {
     const cBolus = col(/^Bolus Volume Delivered/i);
     const cCarb = col(/^BWZ Carb Input/i);
     const cBasal = col(/^Basal Rate/i);
-    const cTempAmt = col(/^Temp Basal Amount/i);
-    const cTempType = col(/^Temp Basal Type/i);
-    const cTempDur = col(/^Temp Basal Duration/i);
     const cSuspend = col(/^Suspend$/i);
     const cRewind = col(/^Rewind$/i);
+    const cPrimeType = col(/^Prime Type/i);
+    const cPrimeVol = col(/^Prime Volume Delivered/i);
+    const cFillVol = col(/^Estimated Reservoir Volume after Fill/i);
     const cSg = col(/^Sensor Glucose/i);
     const sgMg = cSg >= 0 && /mg\/dL/i.test(sec.head[cSg]);
+    if (cCarb >= 0 && /exchange/i.test(sec.head[cCarb])) carbUnit = 'ex';
     const order = guessOrder(sec.rows.slice(0, 400).map((r) => r[cDate]));
 
+    const parsed = [];
     for (const r of sec.rows) {
       const ts = parseDT(`${r[cDate]} ${r[cTime]}`, order);
-      if (ts == null) continue;
+      if (ts != null) parsed.push({ ts, r });
+    }
+    if (!parsed.length) continue;
+    // Порядок внутри одной секунды: в файле «от новых к старым» более ранняя строка стоит ниже.
+    const newestFirst = parsed[0].ts > parsed[parsed.length - 1].ts;
+
+    parsed.forEach(({ ts, r }, i) => {
+      const ord = newestFirst ? -i : i;
       if (ts < minTs) minTs = ts;
       if (ts > maxTs) maxTs = ts;
 
@@ -179,89 +195,134 @@ export function parseCareLink(text) {
       if (bolus != null && bolus > 0) boluses.push({ ts, units: bolus });
 
       const carb = cCarb >= 0 ? num(r[cCarb]) : null;
-      if (carb != null && carb > 0) carbs.push({ ts, g: carb });
+      if (carb != null && carb > 0) carbs.push({ ts, amount: carb });
 
       const rate = cBasal >= 0 ? num(r[cBasal]) : null;
-      if (rate != null) changes.push({ ts, type: 'rate', rate });
-
-      const tempAmt = cTempAmt >= 0 ? num(r[cTempAmt]) : null;
-      if (tempAmt != null) {
-        const dur = cTempDur >= 0 ? parseDuration(r[cTempDur]) : null;
-        if (dur) changes.push({ ts, type: 'temp', mode: /percent/i.test(r[cTempType] || '') ? 'pct' : 'abs', amount: tempAmt, until: ts + dur });
-      }
+      if (rate != null) rateRows.push({ ts, ord, rate });
 
       const susp = cSuspend >= 0 ? (r[cSuspend] || '').trim() : '';
-      if (susp) changes.push({ ts, type: /NORMAL|RESUME/i.test(susp) ? 'resume' : 'suspend' });
+      if (susp) suspends.push({ ts, ord, type: /NORMAL|RESUME/i.test(susp) ? 'resume' : 'suspend' });
 
       if (cRewind >= 0 && (r[cRewind] || '').trim()) rewinds.push(ts);
 
+      const primeType = cPrimeType >= 0 ? (r[cPrimeType] || '').trim() : '';
+      if (primeType) {
+        const vol = (cPrimeVol >= 0 ? num(r[cPrimeVol]) : null) || 0;
+        const kind = /cannula/i.test(primeType) ? 'cannula' : 'tubing';
+        if (vol > 0) primes.push({ ts, units: vol, kind });
+        if (kind === 'tubing') fills.push({ ts, volume: cFillVol >= 0 ? num(r[cFillVol]) : null, prime: vol, cannula: 0 });
+        else fills.push({ ts, cannulaOnly: true, units: vol });
+      }
+
       const sg = cSg >= 0 ? num(r[cSg]) : null;
       if (sg != null && sg > 0) glucose.push([ts, round1(sgMg ? sg / MGDL : sg)]);
-    }
+    });
   }
 
   if (!isFinite(minTs)) throw new ImportError('Таблица CareLink найдена, но в ней не удалось прочитать ни одной даты.', sections[0].rows.slice(0, 5).map((r) => r.slice(0, 4).join(' | ')));
 
+  const byTime = (a, b) => a.ts - b.ts || a.ord - b.ord;
+  rateRows.sort(byTime);
+  suspends.sort(byTime);
+  const changes = [...effectiveBasal(rateRows), ...suspends].sort(byTime);
   const basalByDay = integrateBasal(changes, maxTs);
-  const firstFull = startOfDay(minTs) === minTs ? minTs : startOfDay(minTs) + DAY;
+
+  // Заправки: заполнение трубки открывает новую, заполнение канюли в ближайшие 15 минут относится к ней же.
+  const reservoirFills = [];
+  for (const f of fills.sort((a, b) => a.ts - b.ts)) {
+    if (!f.cannulaOnly) reservoirFills.push({ ts: f.ts, volume: f.volume, prime: f.prime, cannula: 0 });
+    else {
+      const last = reservoirFills[reservoirFills.length - 1];
+      if (last && f.ts - last.ts <= 15 * 60000) last.cannula += f.units;
+    }
+  }
+
+  const firstRate = rateRows.length ? rateRows[0].ts : minTs;
+  const firstFull = startOfDay(firstRate) === firstRate ? firstRate : startOfDay(firstRate) + DAY;
   const lastFullEnd = startOfDay(maxTs);
 
   const days = {};
-  const day = (ts) => (days[ymd(ts)] ||= { bolus: 0, basal: null, carbs: 0, boluses: 0 });
+  const day = (ts) => (days[ymd(ts)] ||= { bolus: 0, basal: null, carbs: 0, boluses: 0, prime: 0 });
   for (const b of boluses) {
     const d = day(b.ts);
     d.bolus += b.units;
     d.boluses++;
   }
-  for (const c of carbs) day(c.ts).carbs += c.g;
-  for (const [date, units] of Object.entries(basalByDay)) (days[date] ||= { bolus: 0, basal: null, carbs: 0, boluses: 0 }).basal = units;
+  for (const c of carbs) day(c.ts).carbs += c.amount;
+  for (const p of primes) day(p.ts).prime += p.units;
+  for (const [date, units] of Object.entries(basalByDay)) (days[date] ||= { bolus: 0, basal: null, carbs: 0, boluses: 0, prime: 0 }).basal = units;
 
   // Неполные первый и последний день исказили бы средние: убираем их.
+  const r2 = (x) => Math.round(x * 100) / 100;
   for (const date of Object.keys(days)) {
-    const t = startOfDay(new Date(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))).getTime());
+    const t = new Date(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))).getTime();
     if (t < firstFull || t >= lastFullEnd) delete days[date];
     else {
-      days[date].bolus = Math.round(days[date].bolus * 100) / 100;
-      if (days[date].basal != null) days[date].basal = Math.round(days[date].basal * 100) / 100;
+      const d = days[date];
+      d.bolus = r2(d.bolus);
+      d.carbs = r2(d.carbs);
+      d.prime = r2(d.prime);
+      if (d.basal != null) d.basal = r2(d.basal);
     }
   }
 
   glucose.sort((a, b) => a[0] - b[0]);
   return {
     days,
+    carbUnit,
     glucose,
     rewinds,
+    fills: reservoirFills,
     from: minTs,
     to: maxTs,
     counts: { boluses: boluses.length, carbs: carbs.length, basalChanges: changes.filter((c) => c.type === 'rate').length, days: Object.keys(days).length },
   };
 }
 
-/** Интегрирует базальную подачу по событиям: смена скорости, временная базальная, остановка. */
-export function integrateBasal(changes, endTs) {
-  const points = [];
-  for (const c of changes) {
-    points.push(c);
-    if (c.type === 'temp') points.push({ ts: c.until, type: 'tempEnd' });
+/**
+ * Оставляет из строк Basal Rate только фактическую скорость подачи.
+ * rows: [{ ts, ord, rate }] в хронологическом порядке.
+ */
+export function effectiveBasal(rows) {
+  const out = [];
+  let current = null;
+  let prevTs = null;
+  for (let i = 0; i < rows.length; ) {
+    let j = i;
+    while (j < rows.length && rows[j].ts === rows[i].ts) j++;
+    const first = rows[i];
+    const single = j - i === 1;
+    const d = new Date(first.ts);
+    const wholeMinute = d.getSeconds() === 0;
+    const onGrid = wholeMinute && d.getMinutes() % 30 === 0;
+    // Плановая скорость, записанная в начале следующей минуты после события.
+    const echo = single && wholeMinute && prevTs != null && first.ts - prevTs < 60000;
+    // Плановая скорость на границе профиля, пока подача остановлена.
+    const scheduledWhileStopped = single && onGrid && current === 0;
+    if (!echo && !scheduledWhileStopped) {
+      out.push({ ts: first.ts, ord: first.ord, type: 'rate', rate: first.rate });
+      current = first.rate;
+      prevTs = first.ts;
+    }
+    i = j;
   }
-  points.sort((a, b) => a.ts - b.ts);
+  return out;
+}
+
+/** Считает базальный инсулин по дням. changes: 'rate' | 'suspend' | 'resume' в хронологическом порядке. */
+export function integrateBasal(changes, endTs) {
   const perDay = {};
   let rate = null;
-  let temp = null;
   let suspended = false;
-
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i];
+  for (let i = 0; i < changes.length; i++) {
+    const p = changes[i];
     if (p.type === 'rate') rate = p.rate;
-    else if (p.type === 'temp') temp = p;
-    else if (p.type === 'tempEnd') {
-      if (temp && temp.until <= p.ts) temp = null;
-    } else if (p.type === 'suspend') suspended = true;
+    else if (p.type === 'suspend') suspended = true;
     else if (p.type === 'resume') suspended = false;
 
-    const segEnd = i + 1 < points.length ? points[i + 1].ts : endTs;
+    const segEnd = i + 1 < changes.length ? changes[i + 1].ts : endTs;
     if (rate == null || segEnd <= p.ts) continue;
-    const eff = suspended ? 0 : temp ? (temp.mode === 'pct' ? (rate * temp.amount) / 100 : temp.amount) : rate;
+    const eff = suspended ? 0 : rate;
     let t = p.ts;
     while (t < segEnd) {
       const chunkEnd = Math.min(startOfDay(t) + DAY, segEnd);

@@ -116,11 +116,12 @@ export function logEvent(ev) {
   const S = data.state.supplies;
   ev.id = uid();
   const stockKey = { set: 'sets', reservoir: 'reservoirs', sensor: 'sensors' }[ev.type];
-  if (stockKey) {
+  // noStock: запись из данных помпы, которая только ставит таймер и запас не трогает.
+  if (stockKey && !ev.noStock) {
     ev.used = S[stockKey].stock > 0 ? 1 : 0;
     S[stockKey].stock -= ev.used;
   }
-  if (ev.type === 'reservoir') {
+  if (ev.type === 'reservoir' && !ev.noStock) {
     Object.assign(ev, takeInsulin(ev.units));
     S.reservoirs.fillUnits = ev.units;
   }
